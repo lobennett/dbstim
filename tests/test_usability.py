@@ -116,6 +116,19 @@ class UsabilityTests(unittest.TestCase):
                             raise KeyError('presentation crashed')
                 self.assertEqual(finishes(fixture), [outcome])
 
+    def test_ctrl_c_finishes_interrupted_and_reraises(self):
+        fixture = Fixture()
+        with server(fixture) as (url, _):
+            session = Client('demo', 'secret', url=url).experiment('Demo').subjects[0].sessions[0]
+            with self.assertRaises(KeyboardInterrupt):
+                with session:
+                    while (run := session.next_run()) is not None:
+                        for trial in run.trials:
+                            run.record(trial, 'started')
+                            run.record(trial, 'completed')
+                    raise KeyboardInterrupt
+            self.assertEqual(finishes(fixture), ['interrupted'])
+
     def test_failed_finish_keeps_the_original_error(self):
         fixture = Fixture()
         with server(fixture) as (url, _):

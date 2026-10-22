@@ -56,7 +56,8 @@ with session:  # starts the session and finishes it when the block ends
 ```
 
 Leaving the block finishes the session as `completed` when every trial is
-completed, `interrupted` if you stopped early, or `failed` if an error was raised.
+completed, `interrupted` if you stopped early (including Ctrl-C), or `failed` if an
+error was raised.
 Stop on any API error and retry an unacknowledged call unchanged. A trial that
 started but never completed blocks continuation until reviewed; it is never
 replayed automatically.

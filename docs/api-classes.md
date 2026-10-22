@@ -85,7 +85,7 @@ Use `Client.close()` or a `with` block when finished.
 - **Experiment:** saved selection and design; publishing freezes assignments.
 - **Subject:** assigned sessions from a published, hash-verified manifest.
 - **Session:** download cache and presentation claim. `with session:` starts it
-  and finishes `completed`, `interrupted`, or `failed`; `finish(status)` does so by hand.
+  and finishes `completed`, `interrupted` (also on Ctrl-C), or `failed`; `finish(status)` does so by hand.
 - **Run:** ordered trials; `next_trial()` reads server progress. `results` is a
   property containing recorded results, not a method.
 - **Trial:** immutable assignment, not a player or progress record. Positions

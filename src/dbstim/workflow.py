@@ -186,17 +186,19 @@ class Session:
         return self
 
     def __exit__(self, kind, error, traceback) -> None:
+        if isinstance(error, Exception):
+            status = 'failed'
+        elif error is not None or _unfinished(self._state(), tuple(trial for block in self._blocks
+                                                                   for trial in block.trials)):
+            status = 'interrupted'
+        else:
+            status = 'completed'
         try:
-            if error is not None:
-                self.finish('failed')
-            elif _unfinished(self._state(), tuple(trial for block in self._blocks for trial in block.trials)):
-                self.finish('interrupted')
-            else:
-                self.finish('completed')
+            self.finish(status)
         except ApiError as failure:
             if error is None:
                 raise
-            error.add_note(f'The session could not be marked failed: {failure}')
+            error.add_note(f'The session could not be marked {status}: {failure}')
 
     def run(self, id: str = 'latest') -> Run:
         if id == 'latest':

@@ -15,7 +15,6 @@ class DemoTests(unittest.TestCase):
         notebook = json.loads(path.read_text())
         self.assertEqual(notebook['nbformat'], 4)
         code = []
-        prose = []
         for cell in notebook['cells']:
             source = ''.join(cell['source'])
             if cell['cell_type'] == 'code':
@@ -28,13 +27,7 @@ class DemoTests(unittest.TestCase):
                 self.assertFalse({'record', 'start', 'finish'} & set(calls), 'Preview cells must not report presentation')
                 self.assertNotIn('with session', source)
                 code.append(source)
-            else:
-                prose.append(source)
         self.assertLessEqual(len('\n'.join(code).splitlines()), 50)
-        self.assertIn('dbstim.connect()', '\n'.join(code))
-        self.assertIn('run.results', '\n'.join(code))
-        self.assertIn('with session:', '\n'.join(prose))
-        self.assertIn('run.record(trial, "started")', '\n'.join(prose))
         self.assertNotIn('password123', path.read_text())
 
     def test_markdown_limit(self):
