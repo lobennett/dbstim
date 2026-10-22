@@ -64,8 +64,8 @@ bins and catalog/version identity. Missing rows or null values mean **unknown**.
 
 ```python
 filters = [
-    MetricFilter("duration_seconds", "gte", 10),
-    MetricFilter("source_view_count", "gte", 100_000),
+    MetricFilter("duration_seconds", ">=", 10),
+    MetricFilter("source_view_count", ">=", 100_000),
 ]
 ```
 
@@ -83,7 +83,8 @@ filters = [
 
 No FFmpeg/OCR/VLM computation runs during filtering. Source views describe the
 original source video; its clips inherit that value. `client.metrics()` lists
-definitions/methods, not all per-video measurements.
+metric definitions, not per-video measurements. Operators `>= <= > < ==` mean
+`gte lte gt lt eq`.
 
 Implementation: website `metric_registry.py`, `metric_explorer.py`,
 `metric_artifact.py`; package `dbp_metrics` produces the worker results.

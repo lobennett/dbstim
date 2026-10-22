@@ -10,6 +10,8 @@ JSONObject: TypeAlias = dict[str, JSONValue]
 TrialStatus: TypeAlias = Literal['started', 'completed']
 SessionStatus: TypeAlias = Literal['completed', 'interrupted', 'failed']
 MediaMode: TypeAlias = Literal['local', 'cache', 'remote']
+Operator: TypeAlias = Literal['gt', 'lt', 'eq', 'gte', 'lte', 'is', 'is_not', '>', '<', '==', '>=', '<=']
+_SYMBOLS = {'>': 'gt', '<': 'lt', '==': 'eq', '>=': 'gte', '<=': 'lte'}
 
 
 def identifier(value: str) -> str:
@@ -21,12 +23,14 @@ def identifier(value: str) -> str:
 @dataclass(frozen=True)
 class MetricFilter:
     metric_id: str
-    operator: Literal['gt', 'lt', 'eq', 'gte', 'lte', 'is', 'is_not']
+    operator: Operator
     value: int | float | bool | None
 
     def __post_init__(self):
         if not isinstance(self.metric_id, str) or not self.metric_id or not self.metric_id.isprintable():
             raise ValueError('metric_id must be a printable string')
+        if isinstance(self.operator, str) and self.operator in _SYMBOLS:
+            object.__setattr__(self, 'operator', _SYMBOLS[self.operator])
         if self.operator not in ('gt', 'lt', 'eq', 'gte', 'lte', 'is', 'is_not'):
             raise ValueError('Unsupported metric operator')
         if self.value is not None and (type(self.value) not in (int, float, bool) or not math.isfinite(self.value)):
@@ -34,6 +38,19 @@ class MetricFilter:
 
     def to_dict(self) -> JSONObject:
         return dict(metric_id=self.metric_id, operator=self.operator, value=self.value)
+
+
+@dataclass(frozen=True)
+class Metric:
+    id: str
+    label: str
+    kind: str
+    unit: str | None
+    operators: tuple[str, ...]
+
+    def __repr__(self) -> str:
+        unit = f', {self.unit}' if self.unit else ''
+        return f"<Metric {self.id}: {self.label} ({self.kind}{unit}); operators {' '.join(self.operators)}>"
 
 
 @dataclass(frozen=True)

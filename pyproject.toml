@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dbstim"
-version = "0.3.0"
+dynamic = ["version"]
 description = "Platform-independent Digital Brain Python API client"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-demo = ["marimo>=0.23,<1"]
+jupyter = ["jupyterlab>=4,<5"]
 
 [project.urls]
 Repository = "https://github.com/lobennett/dbstim"
@@ -19,6 +19,9 @@ Repository = "https://github.com/lobennett/dbstim"
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["dbstim*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "dbstim.__version__"}
 
 [tool.setuptools.package-data]
 dbstim = ["py.typed"]

@@ -1,6 +1,5 @@
 import hashlib
 import json
-from pathlib import Path
 import tempfile
 import unittest
 
@@ -12,18 +11,19 @@ def response(document, status=200, **headers):
     return status, {'Content-Type': 'application/json', **headers}, json.dumps(document).encode()
 
 
-def manifest():
+def manifest(blocks=None):
     trials = [dict(trial_id=f'trial-{index}', media_id='same-video', media_type='video',
                    role=role, segment=dict(start_seconds=start, end_seconds=end))
               for index, (role, start, end) in enumerate([('parent', 0, 5), ('repeat', 0, 5), ('foil', 5, 10)], 1)]
     document = dict(schema_version='dbp-experiment-v1', experiment_id='experiment-1', subject_id='subject-001',
-                    blocks=[dict(block_index=1, trials=trials)])
+                    blocks=blocks or [dict(block_index=1, trials=trials)])
     digest = hashlib.sha256(json.dumps(document, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
     return dict(document, manifest_sha256=digest)
 
 
 class Fixture:
-    def __init__(self):
+    def __init__(self, document=None):
+        self.document = document or manifest()
         self.states = {}
         self.commands = {}
         self.lost_reply = False
@@ -42,12 +42,12 @@ class Fixture:
             self.created = document
             return response(dict(id='experiment-1'), 201)
         if path.endswith('/publish'):
-            return response(dict(subjects=[manifest()]))
+            return response(dict(subjects=[self.document]))
         if path == '/api/v1/experiments/experiment-1':
             return response(dict(id='experiment-1', settings=dict(name='Demo', subject_count=1),
-                                 publication=dict(subjects=[manifest()])))
+                                 publication=dict(subjects=[self.document])))
         if path.endswith('/manifest'):
-            return response(manifest())
+            return response(self.document)
         if path.endswith('/media'):
             payload = b'second-half' if '/trial-3/' in path else b'first-half'
             return 200, {'Content-Type': 'video/mp4', 'Content-Length': len(payload),
@@ -56,8 +56,9 @@ class Fixture:
             return response(dict(path='/api/v1/media-access/' + 'a' * 64, expires_at=9999999999, sha256='b' * 64, size_bytes=99))
         if '/sessions/session-001' in path:
             if method == 'GET':
-                return response(dict(manifest_sha256=manifest()['manifest_sha256'], session_id='session-001',
-                                     runs=[dict(run_id='run-001', trials=manifest()['blocks'][0]['trials'])],
+                return response(dict(manifest_sha256=self.document['manifest_sha256'], session_id='session-001',
+                                     runs=[dict(run_id=f"run-{block['block_index']:03d}", trials=block['trials'])
+                                           for block in self.document['blocks']],
                                      latest_run_id='run-001', progress=self.states.copy(),
                                      unconfirmed=[key for key, value in self.states.items() if value['status'] == 'started']))
             self.commands[document['request_id']] = document
@@ -75,7 +76,7 @@ class WorkflowTests(unittest.TestCase):
         fixture = Fixture()
         with server(fixture) as (url, requests), tempfile.TemporaryDirectory() as directory:
             with Client('demo', 'secret', url=url) as client:
-                self.assertEqual(client.metrics()['metrics'][0]['id'], 'duration_seconds')
+                self.assertEqual(client.metrics()[0].id, 'duration_seconds')
                 experiment = client.experiment('Demo')
                 self.assertIsInstance(experiment, Experiment)
                 subject = experiment.subject('subject-001')

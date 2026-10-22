@@ -68,7 +68,7 @@ Rename repository/distribution/import to dbstim; update known consumers. Extend 
 server before releasing the SDK; preserve existing manifests/events and map legacy
 blocks to runs in one session. Keep old pinned releases usable.
 
-Replace examples/ with one notebooks/api.py marimo demonstration using explicit
-action controls and uncommitted credentials. Each Markdown document stays ≤500 words.
+Keep one notebooks/api.ipynb walkthrough with direct calls and uncommitted
+credentials. Each Markdown document stays ≤500 words.
 Test allocation, two-client resume/conflicts, retries, media identity, and legacy
 compatibility. No production experiment or progress changes during verification.

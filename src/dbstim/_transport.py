@@ -85,15 +85,9 @@ class Transport:
         self._opener = build_opener(ProxyHandler({}), HTTPCookieProcessor(self._cookies), _NoRedirect())
 
     def close(self) -> None:
-        """Forget local credentials; use logout() to revoke the server session."""
+        """Forget local credentials."""
         self._cookies.clear()
         self._csrf = None
-
-    def __enter__(self) -> "Transport":
-        return self
-
-    def __exit__(self, *args: object) -> None:
-        self.close()
 
     @contextmanager
     def _request(self, method: str, path: str, body: JSONObject | None = None,
@@ -169,12 +163,3 @@ class Transport:
         except BaseException:
             self.close()
             raise
-
-    def session(self) -> JSONObject:
-        return self._session(self._json("GET", "/api/auth/session"))
-
-    def logout(self) -> JSONObject:
-        try:
-            return self._json("POST", "/api/auth/logout", {})
-        finally:
-            self.close()

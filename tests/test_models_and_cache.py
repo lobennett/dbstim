@@ -46,7 +46,7 @@ class ValidationTests(unittest.TestCase):
         with server(fixture) as (url, requests):
             client = Client('demo', 'secret', url=url)
             for values in (dict(subjects=True), dict(shared_fraction=-1), dict(shared_fraction=True),
-                           dict(foils_per_run=10), dict(repeats_per_run=10), dict(seed=123),
+                           dict(foils_per_run=10), dict(repeats_per_run=10), dict(seed=True), dict(seed=1.5),
                            dict(sessions_per_subject=0), dict(trials_per_run=0)):
                 with self.subTest(values=values), self.assertRaises(ValueError):
                     client.create_experiment('Demo', **(dict(subjects=1, trials_per_run=5) | values))

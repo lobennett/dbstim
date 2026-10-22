@@ -1,11 +1,19 @@
 """Authenticated entry point for the stimulus browser."""
 
 from collections.abc import Sequence
+from getpass import getpass
 import math
 
 from ._transport import ApiError, Transport
-from .models import JSONObject, MetricFilter, identifier
+from .models import JSONObject, Metric, MetricFilter, identifier
 from .workflow import Experiment
+
+
+def connect(username: str | None = None, *, url: str = 'https://dbstimuli.com', timeout: float = 120) -> 'Client':
+    """Sign in, asking for the username (if not given) and the password without echoing it."""
+    if username is None:
+        username = input('dbstimuli.com username: ').strip()
+    return Client(username, getpass('dbstimuli.com password: '), url=url, timeout=timeout)
 
 
 class Client:
@@ -23,8 +31,14 @@ class Client:
     def __exit__(self, *args):
         self.close()
 
-    def metrics(self) -> JSONObject:
-        return self._http._json('GET', '/api/v1/metrics')
+    def metrics(self) -> list[Metric]:
+        """Metrics you can filter on, such as duration_seconds."""
+        try:
+            return [Metric(row['id'], row.get('label') or row['id'], row.get('kind', ''), row.get('unit'),
+                           tuple(row.get('operators', ())))
+                    for row in self._http._json('GET', '/api/v1/metrics')['metrics']]
+        except (TypeError, KeyError, AttributeError) as error:
+            raise ApiError('Invalid metric list') from error
 
     def experiments(self) -> list[JSONObject]:
         rows = []
@@ -47,7 +61,7 @@ class Client:
     def create_experiment(self, name: str, *, subjects: int, trials_per_run: int,
                           sessions_per_subject: int = 1, runs_per_session: int = 1,
                           foils_per_run: int = 0, repeats_per_run: int = 0, shared_fraction: float = 0,
-                          seed: str = '0', sampling: str = 'random', filters: Sequence[MetricFilter] = (),
+                          seed: str | int = '0', sampling: str = 'random', filters: Sequence[MetricFilter] = (),
                           content: str = '', corpus: str = 'both') -> Experiment:
         counts = dict(subject_count=subjects, sessions_per_subject=sessions_per_subject,
                       runs_per_session=runs_per_session, trials_per_run=trials_per_run,
@@ -64,8 +78,10 @@ class Client:
         parents = trials_per_run - foils_per_run - repeats_per_run
         if parents <= 0 or max(foils_per_run, repeats_per_run) > parents:
             raise ValueError('Foils and repeats require enough initial presentations in every run')
+        if type(seed) is int:
+            seed = str(seed)
         if not isinstance(seed, str) or not seed.strip() or not isinstance(name, str) or not name.strip():
-            raise ValueError('name and seed must be nonempty strings')
+            raise ValueError('name must be a nonempty string and seed a nonempty string or integer')
         if sampling not in ('random', 'balanced', 'unique') or corpus not in ('captions', 'transcripts', 'both'):
             raise ValueError('Choose a supported channel sampling method and caption/transcript corpus')
         query = dict(filters=[item.to_dict() for item in filters], content_query=content, corpus=corpus,

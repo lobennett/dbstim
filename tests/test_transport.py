@@ -74,20 +74,19 @@ class TransportTests(unittest.TestCase):
                 self.assertEqual(len(requests), 2)
                 self.assertEqual(leaked, [])
 
-    def test_failed_logout_and_expired_session_clear_cookie(self):
-        for failure in ("logout", "session"):
-            def respond(method, path, headers, body):
-                if path.endswith("/login"):
-                    return response({"csrf_token": "csrf"}, **{"Set-Cookie": "session=private; Path=/"})
-                if path.endswith("/" + failure):
-                    return response({}, 401 if failure == "session" else 500)
-                self.assertIsNone(headers.get("Cookie"))
-                return response({})
-            with self.subTest(failure=failure), server(respond) as (origin, requests):
-                client = Transport(origin)
-                client.login("user", "secret")
-                with self.assertRaises(ApiError):
-                    getattr(client, failure)()
-                client._json('GET', '/api/v1/metrics')
-                with self.assertRaises(ApiError):
-                    client._json('POST', '/api/v1/media/query', {})
+    def test_expired_session_clears_cookie(self):
+        def respond(method, path, headers, body):
+            if path.endswith("/login"):
+                return response({"csrf_token": "csrf"}, **{"Set-Cookie": "session=private; Path=/"})
+            if path == "/api/v1/experiments":
+                return response({}, 401)
+            self.assertIsNone(headers.get("Cookie"))
+            return response({})
+        with server(respond) as (origin, requests):
+            client = Transport(origin)
+            client.login("user", "secret")
+            with self.assertRaises(ApiError):
+                client._json('GET', '/api/v1/experiments')
+            client._json('GET', '/api/v1/metrics')
+            with self.assertRaises(ApiError):
+                client._json('POST', '/api/v1/media/query', {})

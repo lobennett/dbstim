@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from functools import cached_property
 import hashlib
 import json
 import os
@@ -23,7 +25,14 @@ def _hash_file(path: Path) -> str:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def _manifest(document: JSONObject, experiment_id: str, subject_id: str) -> None:
+@dataclass(frozen=True)
+class _Block:
+    session_id: str
+    run_id: str
+    trials: tuple[Trial, ...]
+
+
+def _manifest(document: JSONObject, experiment_id: str, subject_id: str) -> tuple[_Block, ...]:
     payload = {key: value for key, value in document.items() if key != 'manifest_sha256'}
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':'),
                                       ensure_ascii=False, allow_nan=False).encode()).hexdigest()
@@ -31,7 +40,7 @@ def _manifest(document: JSONObject, experiment_id: str, subject_id: str) -> None
             or document.get('subject_id') != subject_id or document.get('manifest_sha256') != digest):
         raise ApiError('Manifest identity or SHA-256 does not match')
     seen = set()
-    run_keys = set()
+    parsed: list[_Block] = []
     blocks = document.get('blocks')
     if not isinstance(blocks, list) or not blocks:
         raise ApiError('Manifest requires runs')
@@ -40,19 +49,21 @@ def _manifest(document: JSONObject, experiment_id: str, subject_id: str) -> None
                 or type(block.get('block_index')) is not int or block['block_index'] != index):
             raise ApiError('Invalid manifest block order')
         try:
-            run_key = (identifier(block.get('session_id', 'session-001')), identifier(block.get('run_id', f'run-{index:03d}')))
+            session_id = identifier(block.get('session_id', 'session-001'))
+            run_id = identifier(block.get('run_id', f'run-{index:03d}'))
         except ValueError as error:
             raise ApiError('Invalid manifest session or run identity') from error
-        if run_key in run_keys:
+        if any((item.session_id, item.run_id) == (session_id, run_id) for item in parsed):
             raise ApiError('Duplicate run identity within a session')
-        run_keys.add(run_key)
-        for position, row in enumerate(block['trials'], 1):
-            trial = _trial(row, position)
+        trials = tuple(_trial(row, position) for position, row in enumerate(block['trials'], 1))
+        for trial in trials:
             if trial.trial_id in seen:
                 raise ApiError('Duplicate trial identity')
             seen.add(trial.trial_id)
+        parsed.append(_Block(session_id, run_id, trials))
     if not seen:
         raise ApiError('Manifest has no trials')
+    return tuple(parsed)
 
 
 def _trial(row: JSONObject, position: int) -> Trial:
@@ -61,6 +72,10 @@ def _trial(row: JSONObject, position: int) -> Trial:
         return Trial(row['trial_id'], row['media_id'], position, row['role'], row['media_type'], segment)
     except (ValueError, TypeError, KeyError) as error:
         raise ApiError('Invalid manifest trial') from error
+
+
+def _unfinished(state: JSONObject, trials: tuple[Trial, ...]) -> list[Trial]:
+    return [trial for trial in trials if state['progress'].get(trial.trial_id, {}).get('status') != 'completed']
 
 
 class Experiment:
@@ -73,9 +88,12 @@ class Experiment:
         document = self._client._http._json('GET', self._path)
         settings = document['settings']
         parents = settings.get('parents_per_subject', 0)
-        return dict(id=self.id, name=settings['name'], published=document.get('publication') is not None,
+        publication = document.get('publication')
+        subject_ids = ([row['subject_id'] for row in publication['subjects']] if publication is not None
+                       else [f'subject-{index + 1:03d}' for index in range(settings['subject_count'])])
+        return dict(id=self.id, name=settings['name'], published=publication is not None,
                     settings=settings, shared_fraction_realized=settings.get('shared_per_subject', 0) / parents if parents else 0,
-                    subject_ids=[f'subject-{index + 1:03d}' for index in range(settings['subject_count'])])
+                    subject_ids=subject_ids)
 
     def publish(self) -> Experiment:
         self._client._http._json('POST', self._path + '/publish', {})
@@ -84,20 +102,38 @@ class Experiment:
     def subject(self, id: str) -> Subject:
         return Subject(self, identifier(id))
 
+    @cached_property
+    def subjects(self) -> tuple[Subject, ...]:
+        """Every subject of the published experiment, in the server's order."""
+        publication = self._client._http._json('GET', self._path).get('publication')
+        if publication is None:
+            raise ApiError('Publish the experiment before choosing subjects')
+        try:
+            rows = [(identifier(row['subject_id']), row) for row in publication['subjects']]
+        except (ValueError, TypeError, KeyError) as error:
+            raise ApiError('Invalid published subject list') from error
+        return tuple(Subject(self, subject_id, _document=row) for subject_id, row in rows)
+
 
 class Subject:
-    def __init__(self, experiment: Experiment, subject_id: str):
+    def __init__(self, experiment: Experiment, subject_id: str, *, _document: JSONObject | None = None):
         self.experiment = experiment
         self.id = subject_id
         self._path = experiment._path + '/subjects/' + self.id
-        self._manifest = experiment._client._http._json('GET', self._path + '/manifest')
-        _manifest(self._manifest, experiment.id, self.id)
-        self.session_ids = tuple(dict.fromkeys(block.get('session_id', 'session-001') for block in self._manifest['blocks']))
+        self._manifest = (_document if _document is not None
+                          else experiment._client._http._json('GET', self._path + '/manifest'))
+        self._blocks = _manifest(self._manifest, experiment.id, self.id)
+        self.session_ids = tuple(dict.fromkeys(block.session_id for block in self._blocks))
 
     def session(self, id: str = 'session-001', *, directory: str | Path | None = None) -> Session:
         if id not in self.session_ids:
             raise ValueError('Choose a session from subject.session_ids')
         return Session(self, id, directory=directory)
+
+    @cached_property
+    def sessions(self) -> tuple[Session, ...]:
+        """This subject's sessions in assigned order; the same objects on every access."""
+        return tuple(Session(self, session_id) for session_id in self.session_ids)
 
 
 class Session:
@@ -108,8 +144,8 @@ class Session:
         self._path = subject._path + '/sessions/' + self.id
         self._writer = uuid.uuid4().hex
         self._pending: tuple[str, JSONObject] | None = None
-        self._blocks = [block for block in subject._manifest['blocks'] if block.get('session_id', 'session-001') == self.id]
-        self.run_ids = tuple(block.get('run_id', f"run-{block['block_index']:03d}") for block in self._blocks)
+        self._blocks = tuple(block for block in subject._blocks if block.session_id == self.id)
+        self.run_ids = tuple(block.run_id for block in self._blocks)
         self._directory = self._root(Path(directory)) if directory is not None else None
 
     def _state(self) -> JSONObject:
@@ -145,6 +181,23 @@ class Session:
             raise ValueError('Choose completed, interrupted or failed')
         self._send('finish', status=status)
 
+    def __enter__(self) -> Session:
+        self.start()
+        return self
+
+    def __exit__(self, kind, error, traceback) -> None:
+        try:
+            if error is not None:
+                self.finish('failed')
+            elif _unfinished(self._state(), tuple(trial for block in self._blocks for trial in block.trials)):
+                self.finish('interrupted')
+            else:
+                self.finish('completed')
+        except ApiError as failure:
+            if error is None:
+                raise
+            error.add_note(f'The session could not be marked failed: {failure}')
+
     def run(self, id: str = 'latest') -> Run:
         if id == 'latest':
             id = self._state()['latest_run_id']
@@ -152,10 +205,15 @@ class Session:
             raise ValueError('Choose a run from session.run_ids')
         return Run(self, id, self._blocks[self.run_ids.index(id)])
 
+    def next_run(self) -> Run | None:
+        """The first run with unfinished trials, or None when every trial is completed."""
+        state = self._state()
+        return next((Run(self, block.run_id, block) for block in self._blocks if _unfinished(state, block.trials)), None)
+
     def download(self, directory: str | Path) -> Path:
         self._directory = self._root(Path(directory))
-        for run_id in self.run_ids:
-            for trial in self.run(run_id).trials:
+        for block in self._blocks:
+            for trial in block.trials:
                 self._media(trial, 'cache')
         return self._directory
 
@@ -228,10 +286,10 @@ class Session:
 
 
 class Run:
-    def __init__(self, session: Session, run_id: str, block: JSONObject):
+    def __init__(self, session: Session, run_id: str, block: _Block):
         self.session = session
         self.id = run_id
-        self.trials = tuple(_trial(row, index) for index, row in enumerate(block['trials'], 1))
+        self.trials = block.trials
 
     @property
     def results(self) -> list[JSONObject]:
@@ -242,9 +300,9 @@ class Run:
         state = self.session._state()
         if state['unconfirmed']:
             raise ApiError('An unconfirmed trial requires review; no automatic replay or skip')
-        return next((trial for trial in self.trials if state['progress'].get(trial.trial_id, {}).get('status') != 'completed'), None)
+        return next(iter(_unfinished(state, self.trials)), None)
 
-    def media(self, trial: Trial, mode: MediaMode = 'local') -> Path | str:
+    def media(self, trial: Trial, mode: MediaMode = 'cache') -> Path | str:
         if trial not in self.trials:
             raise ValueError('Choose a trial from this run')
         return self.session._media(trial, mode)
