@@ -1,6 +1,6 @@
 # dbstim API design
 
-Status: approved 2026-10-20; implemented locally, pending server deployment.
+Status: historical 2026-10-20 design; current API: api-classes.md.
 
 ## Purpose
 

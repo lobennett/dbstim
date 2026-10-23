@@ -1,3 +1,5 @@
+import errno
+import json
 import unittest
 from unittest.mock import patch
 from urllib.error import URLError
@@ -90,3 +92,34 @@ class TransportTests(unittest.TestCase):
             client._json('GET', '/api/v1/metrics')
             with self.assertRaises(ApiError):
                 client._json('POST', '/api/v1/media/query', {})
+
+    def test_sign_in_failures_say_what_to_check_without_echoing_secrets(self):
+        for status, message in ((401, '^Sign-in failed: check your username and password$'),
+                                (429, '^Sign-in failed: too many attempts; wait and try again later$')):
+            with server(lambda *args: response({"detail": "secret-detail"}, status)) as (origin, _):
+                with self.subTest(status=status), self.assertRaisesRegex(ApiError, message) as caught:
+                    Transport(origin).login("user", "secret-password")
+                self.assertEqual(caught.exception.status, status)
+
+    def test_lookup_and_unavailable_details_are_sanitized_and_capped(self):
+        cases = ((404, {"detail": "Session not found."}, "HTTP 404: Session not found.$"),
+                 (503, {"detail": "Study operation unavailable.\nRetry shortly."}, "HTTP 503: Study operation unavailable. Retry shortly.$"),
+                 (503, {"detail": {"code": "metric_busy", "message": "Another query is running"}}, "HTTP 503: Another query is running$"),
+                 (404, {"detail": "x" * 600}, "HTTP 404: x{512}$"),
+                 (500, {"detail": "Traceback with internals"}, "HTTP 500; response body withheld$"),
+                 (401, {"detail": "Please sign in"}, "HTTP 401: you are signed out; connect again$"))
+        for status, document, message in cases:
+            with server(lambda *args: response(document, status)) as (origin, _):
+                with self.subTest(status=status, document=document), self.assertRaisesRegex(ApiError, message):
+                    Transport(origin)._json('GET', '/api/v1/experiments/x')
+
+    def test_failures_inside_the_callers_block_are_not_reported_as_connection_failures(self):
+        with server(lambda *args: response({})) as (origin, _):
+            client = Transport(origin)
+            with self.assertRaises(OSError) as caught:
+                with client._request('GET', '/api/v1/metrics'):
+                    raise OSError(errno.ENOSPC, 'No space left on device')
+            self.assertEqual(caught.exception.errno, errno.ENOSPC)
+            with patch('http.client.HTTPResponse.read', side_effect=ConnectionResetError('secret')), \
+                    self.assertRaisesRegex(ApiError, '^Request failed; connection details withheld$'):
+                client._json('GET', '/api/v1/metrics')

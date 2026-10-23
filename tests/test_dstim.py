@@ -2,6 +2,7 @@ import hashlib
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from dbstim import ApiError, Client, Experiment, MetricFilter, Run, Session, Subject, Trial
 from tests.http_fixture import server
@@ -27,7 +28,10 @@ class Fixture:
         self.states = {}
         self.commands = {}
         self.results = []
-        self.lost_reply = False
+        self.lost_reply = 0  # Replies to replace with a 503 after applying the command.
+        self.abandoned = True  # False answers abandoned as servers before it did.
+        self.writer = None
+        self.status = 'not_started'
 
     def __call__(self, method, path, headers, body):
         document = json.loads(body) if body else {}
@@ -61,14 +65,30 @@ class Fixture:
                                      runs=[dict(run_id=f"run-{block['block_index']:03d}", trials=block['trials'])
                                            for block in self.document['blocks']],
                                      latest_run_id='run-001', progress=self.states.copy(), results=list(self.results),
-                                     unconfirmed=[key for key, value in self.states.items() if value['status'] == 'started']))
-            self.commands[document['request_id']] = document
-            if path.endswith('/trials'):
-                self.states[document['trial_id']] = dict(status=document['status'])
-                if document.get('result') is not None:
-                    self.results.append(dict(trial_id=document['trial_id'], result=document['result']))
+                                     status=self.status,
+                                     unconfirmed=[key for key, value in self.states.items() if value['status'] == 'started'],
+                                     abandoned=[key for key, value in self.states.items() if value['status'] == 'abandoned']))
+            if document.get('status') == 'abandoned' and not self.abandoned:
+                return response(dict(detail='Choose an assigned trial and started or completed.'), 400)
+            previous = self.commands.get(document['request_id'])
+            if previous is not None and previous != document:
+                return response(dict(detail='Request ID belongs to a different command.'), 409)
+            if previous is None:
+                if path.endswith('/start'):
+                    if self.writer not in (None, document['writer_id']) and not document['takeover']:
+                        return response(dict(detail='Another presenter owns this session. '
+                                                    'Review progress before explicit takeover.'), 409)
+                    self.writer, self.status = document['writer_id'], 'started'
+                elif path.endswith('/finish'):
+                    self.writer, self.status = None, document['status']
+                else:
+                    self.states[document['trial_id']] = dict(status=document['status'])
+                    if document.get('result') is not None:
+                        self.results.append(dict(trial_id=document['trial_id'], status=document['status'],
+                                                 result=document['result']))
+                self.commands[document['request_id']] = document
             if self.lost_reply:
-                self.lost_reply = False
+                self.lost_reply -= 1
                 return response({}, 503)
             return response(dict(accepted=document['request_id']))
         raise AssertionError(path)
@@ -112,23 +132,30 @@ class WorkflowTests(unittest.TestCase):
                     run.media(trial)
                 self.assertTrue(any(item[2].get('Cookie') == 'dbp_session=secret' for item in requests))
 
-    def test_lost_ack_retries_same_command_and_blocks_advancement(self):
+    def test_lost_ack_is_resent_unchanged_and_blocks_advancement_until_acknowledged(self):
         fixture = Fixture()
-        with server(fixture) as (url, _):
+        with server(fixture) as (url, requests), patch('dbstim.workflow._RETRY_DELAYS', (0, 0, 0)):
             client = Client('demo', 'secret', url=url)
             session = client.experiment('Demo').subject('subject-001').session()
             session.start()
             run = session.run()
             trial = run.next_trial()
-            fixture.lost_reply = True
-            with self.assertRaises(ApiError):
-                run.record(trial, 'started')
-            before = len(fixture.commands)
-            with self.assertRaises(ApiError):
-                run.next_trial()
+            fixture.lost_reply = 1
             run.record(trial, 'started')
-            self.assertEqual(len(fixture.commands), before)
+            sent = [body for _, path, _, body in requests if path.endswith('/trials')]
+            self.assertEqual(len(sent), 2)
+            self.assertEqual(sent[0], sent[1])
+            fixture.lost_reply = 4
+            with self.assertRaisesRegex(ApiError, "record\\(trial-1, 'completed'\\) was not acknowledged after 4 attempts"):
+                run.record(trial, 'completed')
+            before = len(fixture.commands)
+            with self.assertRaisesRegex(ApiError, 'not acknowledged'):
+                run.next_trial()
+            with self.assertRaisesRegex(ApiError, 'not acknowledged'):
+                session.finish('interrupted')
             run.record(trial, 'completed')
+            self.assertEqual(len(fixture.commands), before)
+            self.assertEqual(len({body for _, path, _, body in requests if path.endswith('/trials')}), 2)
             self.assertEqual(run.next_trial().trial_id, 'trial-2')
 
     def test_create_is_draft_and_pins_query(self):

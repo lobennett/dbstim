@@ -7,11 +7,13 @@ from typing import Literal, TypeAlias
 
 JSONValue: TypeAlias = str | int | float | bool | None | list['JSONValue'] | dict[str, 'JSONValue']
 JSONObject: TypeAlias = dict[str, JSONValue]
-TrialStatus: TypeAlias = Literal['started', 'completed']
+TrialStatus: TypeAlias = Literal['started', 'completed', 'abandoned']
 SessionStatus: TypeAlias = Literal['completed', 'interrupted', 'failed']
 MediaMode: TypeAlias = Literal['local', 'cache', 'remote']
-Operator: TypeAlias = Literal['gt', 'lt', 'eq', 'gte', 'lte', 'is', 'is_not', '>', '<', '==', '>=', '<=']
+Operator: TypeAlias = Literal['gt', 'lt', 'eq', 'gte', 'lte', 'is', 'is_not', '>', '<', '==', '!=', '>=', '<=']
 _SYMBOLS = {'>': 'gt', '<': 'lt', '==': 'eq', '>=': 'gte', '<=': 'lte'}
+_TRUE_FALSE = {'==': 'is', '!=': 'is_not'}
+_CODES = {'gt': '>', 'lt': '<', 'eq': '==', 'gte': '>=', 'lte': '<=', 'is': '==', 'is_not': '!='}
 
 
 def identifier(value: str) -> str:
@@ -29,10 +31,16 @@ class MetricFilter:
     def __post_init__(self):
         if not isinstance(self.metric_id, str) or not self.metric_id or not self.metric_id.isprintable():
             raise ValueError('metric_id must be a printable string')
-        if isinstance(self.operator, str) and self.operator in _SYMBOLS:
+        # True/false metrics compare with is/is_not on the server. None keeps == as eq, as in
+        # 0.4, because a whole-number metric accepts eq with None as an inactive filter.
+        if type(self.value) is bool and isinstance(self.operator, str) and self.operator in _TRUE_FALSE:
+            object.__setattr__(self, 'operator', _TRUE_FALSE[self.operator])
+        elif isinstance(self.operator, str) and self.operator in _SYMBOLS:
             object.__setattr__(self, 'operator', _SYMBOLS[self.operator])
+        if self.operator == '!=':
+            raise ValueError('!= compares true/false metrics; use it with True or False')
         if self.operator not in ('gt', 'lt', 'eq', 'gte', 'lte', 'is', 'is_not'):
-            raise ValueError('Unsupported metric operator')
+            raise ValueError('Unsupported metric operator; use >=, <=, >, <, == or !=')
         if self.value is not None and (type(self.value) not in (int, float, bool) or not math.isfinite(self.value)):
             raise ValueError('Metric values must be finite numbers, booleans or null')
 
@@ -50,7 +58,8 @@ class Metric:
 
     def __repr__(self) -> str:
         unit = f', {self.unit}' if self.unit else ''
-        return f"<Metric {self.id}: {self.label} ({self.kind}{unit}); operators {' '.join(self.operators)}>"
+        symbols = ' '.join(dict.fromkeys(_CODES.get(code, code) for code in self.operators))
+        return f"<Metric {self.id}: {self.label} ({self.kind}{unit}); operators {symbols}>"
 
 
 @dataclass(frozen=True)

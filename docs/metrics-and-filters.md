@@ -83,8 +83,8 @@ filters = [
 
 No FFmpeg/OCR/VLM computation runs during filtering. Source views describe the
 original source video; its clips inherit that value. `client.metrics()` lists
-metric definitions, not per-video measurements. Operators `>= <= > < ==` mean
-`gte lte gt lt eq`.
+metric definitions, not per-video measurements. Operators `>= <= > <` mean
+`gte lte gt lt`; `==` means `eq` for whole numbers, or `is` with `True`/`False`.
 
 Implementation: website `metric_registry.py`, `metric_explorer.py`,
 `metric_artifact.py`; package `dbp_metrics` produces the worker results.

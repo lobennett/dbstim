@@ -22,6 +22,13 @@ class ApiError(RuntimeError):
         self.status = status
 
 
+class _Unreachable(ApiError):
+    """The connection failed, so the server may or may not have processed the request."""
+
+    def __init__(self) -> None:
+        super().__init__("Request failed; connection details withheld")
+
+
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, request, stream, code, message, headers, new_url):
         return None
@@ -103,23 +110,20 @@ class Transport:
             headers["Content-Type"] = "application/json"
         request = Request(self.origin + path, data=encoded, headers=headers, method=method)
         try:
-            with self._opener.open(request, timeout=self.timeout) as response:
-                if response.status not in (200, 201):
-                    raise ApiError("Unexpected HTTP response", status=response.status)
-                if response.headers.get("Content-Encoding", "identity").lower() != "identity":
-                    raise ApiError("Encoded responses are not supported")
-                yield response
+            response = self._opener.open(request, timeout=self.timeout)
         except HTTPError as error:
             status = error.code
             detail = None
             try:
-                if status in (400, 409) and not path.startswith("/api/auth/"):
+                if status in (400, 404, 409, 503) and not path.startswith("/api/auth/"):
                     raw = error.read(4097)
                     if len(raw) <= 4096:
                         value = json.loads(raw)
-                        if isinstance(value, dict) and isinstance(value.get("detail"), str):
-                            printable = "".join(character if character.isprintable() else " "
-                                                for character in value["detail"])
+                        value = value.get("detail") if isinstance(value, dict) else None
+                        if isinstance(value, dict):
+                            value = value.get("message")
+                        if isinstance(value, str):
+                            printable = "".join(character if character.isprintable() else " " for character in value)
                             detail = " ".join(printable.split())[:512]
             except (ValueError, OSError, HTTPException):
                 pass
@@ -127,14 +131,29 @@ class Transport:
                 error.close()
             if status == 401:
                 self.close()
+                detail = "you are signed out; connect again"
             message = f"Server returned HTTP {status}"
             raise ApiError(message + (f": {detail}" if detail else "; response body withheld"), status=status) from None
         except (OSError, URLError, HTTPException):
-            raise ApiError("Request failed; connection details withheld") from None
+            raise _Unreachable() from None
+        # Errors raised by the caller's block, such as a full disk, are not connection failures.
+        with response:
+            if response.status not in (200, 201):
+                raise ApiError("Unexpected HTTP response", status=response.status)
+            if response.headers.get("Content-Encoding", "identity").lower() != "identity":
+                raise ApiError("Encoded responses are not supported")
+            yield response
+
+    @staticmethod
+    def _read(response: HTTPResponse, size: int) -> bytes:
+        try:
+            return response.read(size)
+        except (OSError, HTTPException):
+            raise _Unreachable() from None
 
     def _json(self, method: str, path: str, body: JSONObject | None = None) -> JSONObject:
         with self._request(method, path, body) as response:
-            raw = response.read(self.max_json_bytes + 1)
+            raw = self._read(response, self.max_json_bytes + 1)
         if len(raw) > self.max_json_bytes:
             raise ApiError("JSON exceeds configured size limit")
         try:
@@ -160,6 +179,13 @@ class Transport:
             raise ValueError("username and password must be nonempty strings")
         try:
             return self._session(self._json("POST", "/api/auth/login", {"username": username, "password": password}))
+        except ApiError as error:
+            self.close()
+            if error.status == 401:
+                raise ApiError("Sign-in failed: check your username and password", status=401) from None
+            if error.status == 429:
+                raise ApiError("Sign-in failed: too many attempts; wait and try again later", status=429) from None
+            raise
         except BaseException:
             self.close()
             raise

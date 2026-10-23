@@ -1,7 +1,10 @@
 import ast
 import json
 from pathlib import Path
+import re
 import unittest
+
+import dbstim
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +32,11 @@ class DemoTests(unittest.TestCase):
                 code.append(source)
         self.assertLessEqual(len('\n'.join(code).splitlines()), 50)
         self.assertNotIn('password123', path.read_text())
+
+    def test_readme_installs_this_release(self):
+        pins = re.findall(r'dbstim\.git@([^"\s]+)', (ROOT / 'README.md').read_text())
+        self.assertEqual(len(pins), 3)
+        self.assertEqual(set(pins), {f'v{dbstim.__version__}'})
 
     def test_markdown_limit(self):
         paths = [ROOT / 'README.md', *(ROOT / 'docs').rglob('*.md')]

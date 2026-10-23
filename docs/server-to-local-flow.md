@@ -30,11 +30,11 @@ flowchart TB
     SDK -->|"authenticated requests"| API
 ```
 
-`session.download(directory)` fetches the session's media; `run.media(trial)`
-fetches one item if it is not already verified locally. `mode="local"` requires
-verified files in the session directory; pass that same `directory=` when reopening. Files are checked
-against size, SHA-256, and assignment identity. `mode="remote"` returns a five-minute
-streaming URL. Researchers authenticate to the website, not Google Cloud.
+`session.download()` fetches the session's media into the per-user cache
+(`~/.cache/dbstim`) that every program shares; `run.media(trial)` fetches one item
+if not already verified there. `mode="local"` uses only verified files.
+Files are checked against size, SHA-256, and assignment identity. `mode="remote"`
+returns a five-minute streaming URL. Researchers authenticate to the website, not Google Cloud.
 
 ## 2. Record and resume
 
@@ -62,15 +62,15 @@ sequenceDiagram
         API-->>SDK: Acknowledge
         Note over Task: Present with PGL / PsychoPy
         Task->>SDK: run.record(trial, "completed", result=...)
-        SDK->>API: Store completed event and optional result
+        SDK->>API: Store completed (or abandoned) event and result
         API-->>SDK: Acknowledge
     end
-    alt All session trials confirmed
+    alt Every session trial completed
         Note over Task: session.next_run() moves to later runs
         Task->>SDK: leave the with block, finish("completed")
         SDK->>API: Validate completion and release claim
         API-->>SDK: Acknowledge
-    else Stopped early
+    else Stopped early or abandoned
         Task->>SDK: leave the with block, finish("interrupted")
         SDK->>API: Release claim, retain trial state
         API-->>SDK: Acknowledge
@@ -82,13 +82,13 @@ sequenceDiagram
     SDK-->>Task: Next Trial, None, or unresolved-trial error
 ```
 
-Completed trials stay completed. An unconfirmed start anywhere in the session
-blocks every run until reviewed; recovery policy is not yet implemented. Retry
-unacknowledged operations unchanged on the **same Session object**. An active
-presenter requires explicit `start(takeover=True)` to replace. An error inside
-`with session:` finishes it as `failed`.
+Completed and abandoned trials are final. An unconfirmed start anywhere in the
+session blocks every run until it is recorded completed or abandoned
+([recovery](recovery.md)). Dropped commands are resent with the same request ID.
+An active presenter requires explicit `start(takeover=True)` to replace. An error
+inside `with session:` finishes it as `failed`.
 
 `session.next_run()` is the next unfinished run; `session.run("latest")` is the
-most recently started one. `run.results` reads reported results from the server. Deleting local downloads never resets server progress.
+most recently started one. `session.results` reads reported results from the server. Deleting local downloads never resets server progress.
 
 [API objects](api-classes.md) · [Metric storage and filters](metrics-and-filters.md)

@@ -30,9 +30,12 @@ classDiagram
     class Session {
         id
         run_ids
+        unconfirmed
+        results
         with session
         next_run() Run_or_None
-        download(directory) Path
+        download(directory=None) Path
+        record(trial, status, result)
         run(id) Run
         start(takeover)
         finish(status)
@@ -84,25 +87,28 @@ Use `Client.close()` or a `with` block when finished.
 
 - **Experiment:** saved selection and design; publishing freezes assignments.
 - **Subject:** assigned sessions from a published, hash-verified manifest.
-- **Session:** download cache and presentation claim. `with session:` starts it
-  and finishes `completed`, `interrupted` (also on Ctrl-C), or `failed`; `finish(status)` does so by hand.
+- **Session:** presentation claim and progress. `with session:` starts it and
+  finishes `completed`, `interrupted` (Ctrl-C or an abandoned trial), or `failed`;
+  `finish(status)` does so by hand. `record()` accepts any trial of the session.
 - **Run:** ordered trials; `next_trial()` reads server progress. `results` is a
   property containing recorded results, not a method.
 - **Trial:** immutable assignment, not a player or progress record. Positions
   start at one within each run; roles are `parent`, `repeat`, or `foil`.
 - **Segment:** optional source interval. Initial halves and complementary foils
   are already rendered for playback from time zero.
-- **MetricFilter:** metric, comparison operator (`">="` or `"gte"`), and threshold.
+- **MetricFilter:** metric, comparison operator (`">="` or `"gte"`; `"=="`/`"!="`
+  with `True`/`False`), and threshold.
 - **Metric:** one filterable metric from `client.metrics()`.
 
 `session.next_run()` returns the first run with unfinished trials, or `None`.
 `session.run("latest")` selects the most recently started run instead. An
-unconfirmed start in any run blocks `next_trial()` for the whole session until
-reviewed. `run.media(trial)` returns a verified local file, downloading it first
-if needed.
+unconfirmed start in any run blocks `next_trial()` for the whole session until it
+is recorded `completed` or `abandoned`; `session.unconfirmed` lists it.
+`run.media(trial)` returns a verified file from the per-user cache, downloading
+it first if needed.
 
 Workflow classes live in `src/dbstim/workflow.py`, authentication in `client.py`,
 and frozen data types in `models.py`. Video is currently the supported modality.
 PGL/PsychoPy owns presentation; **the server owns progress**.
 
-[Metric storage and filters](metrics-and-filters.md) · [Media and session flow](server-to-local-flow.md)
+[Metric storage and filters](metrics-and-filters.md) · [Media and session flow](server-to-local-flow.md) · [Recovery](recovery.md)

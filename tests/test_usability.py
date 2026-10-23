@@ -1,4 +1,5 @@
 from contextlib import nullcontext
+from decimal import Decimal
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -27,8 +28,13 @@ class UsabilityTests(unittest.TestCase):
             with self.subTest(symbol=symbol):
                 self.assertEqual(MetricFilter('duration_seconds', symbol, 10).to_dict()['operator'], code)
         self.assertEqual(MetricFilter('duration_seconds', '>=', 10), MetricFilter('duration_seconds', 'gte', 10))
-        with self.assertRaises(ValueError):
-            MetricFilter('duration_seconds', '=>', 10)
+        for symbol, value, code in (('==', True, 'is'), ('!=', True, 'is_not'), ('==', False, 'is'),
+                                    ('is', True, 'is'), ('==', None, 'eq'), ('==', 1, 'eq')):
+            with self.subTest(symbol=symbol, value=value):
+                self.assertEqual(MetricFilter('audio_track_present', symbol, value).operator, code)
+        for symbol, value in (('=>', 10), ('!=', 10), ('!=', None), (['=='], True)):
+            with self.subTest(symbol=symbol, value=value), self.assertRaises(ValueError):
+                MetricFilter('duration_seconds', symbol, value)
 
     def test_integer_seed_is_sent_as_text(self):
         fixture = Fixture()
@@ -46,7 +52,9 @@ class UsabilityTests(unittest.TestCase):
         with server(respond) as (url, _):
             [metric] = Client('demo', 'secret', url=url).metrics()
         self.assertEqual(metric, Metric('duration_seconds', 'Duration', 'number', 'seconds', ('gt', 'gte')))
-        self.assertEqual(repr(metric), '<Metric duration_seconds: Duration (number, seconds); operators gt gte>')
+        self.assertEqual(repr(metric), '<Metric duration_seconds: Duration (number, seconds); operators > >=>')
+        self.assertEqual(repr(Metric('audio_track_present', 'Audio track', 'boolean', None, ('is', 'is_not'))),
+                         '<Metric audio_track_present: Audio track (boolean); operators == !=>')
 
     def test_connect_prompts_without_echoing_the_password(self):
         with server(Fixture()) as (url, requests):
@@ -112,8 +120,8 @@ class UsabilityTests(unittest.TestCase):
                         for trial in trials:
                             run.record(trial, 'started')
                             run.record(trial, 'completed', dict(rt=trial.position))
-                        self.assertEqual(run.results, [dict(trial_id=trial.trial_id, result=dict(rt=trial.position))
-                                                       for trial in trials])
+                        self.assertEqual(run.results, [dict(trial_id=trial.trial_id, status='completed',
+                                                            result=dict(rt=trial.position)) for trial in trials])
                         if outcome == 'failed':
                             raise KeyError('presentation crashed')
                 self.assertEqual(finishes(fixture), [outcome])
@@ -133,12 +141,12 @@ class UsabilityTests(unittest.TestCase):
 
     def test_failed_finish_keeps_the_original_error(self):
         fixture = Fixture()
-        with server(fixture) as (url, _):
+        with server(fixture) as (url, _), patch('dbstim.workflow._RETRY_DELAYS', (0, 0, 0)):
             session = Client('demo', 'secret', url=url).experiment('Demo').subjects[0].sessions[0]
             with self.assertRaises(KeyError) as caught:
                 with session:
                     run = session.next_run()
-                    fixture.lost_reply = True
+                    fixture.lost_reply = 4
                     with self.assertRaises(ApiError):
                         run.record(run.trials[0], 'started')
                     raise KeyError('stop')
@@ -157,6 +165,128 @@ class UsabilityTests(unittest.TestCase):
             self.assertEqual(len(requests), before)
             with self.assertRaisesRegex(ApiError, 'Download'):
                 run.media(run.trials[2], mode='local')
+
+    def test_interrupted_trial_is_listed_named_and_abandoned_without_replay(self):
+        fixture = Fixture(two_runs())
+        with server(fixture) as (url, _):
+            session = Client('demo', 'secret', url=url).experiment('Demo').subjects[0].sessions[0]
+            with self.assertRaises(KeyboardInterrupt), session:
+                run = session.next_run()
+                trial = run.next_trial()
+                run.record(trial, 'started')
+                raise KeyboardInterrupt
+            resumed = Client('demo', 'secret', url=url).experiment('Demo').subjects[0].sessions[0]
+            self.assertEqual(resumed.unconfirmed, (trial,))
+            presented = []
+            with resumed:
+                with self.assertRaisesRegex(ApiError, r'run1-trial-1 \(run-001, position 1\) was started but neither '
+                                                      r'completed nor abandoned.*session.record\(trial, "abandoned"\)'):
+                    resumed.next_run().next_trial()
+                resumed.record(trial, 'abandoned', result={'reason': 'KeyboardInterrupt'})
+                self.assertEqual(resumed.unconfirmed, ())
+                while (run := resumed.next_run()) is not None:
+                    while (item := run.next_trial()) is not None:
+                        run.record(item, 'started')
+                        run.record(item, 'completed')
+                        presented.append(item.trial_id)
+            self.assertEqual(presented, ['run1-trial-2', 'run2-trial-1', 'run2-trial-2'])
+            self.assertEqual(finishes(fixture), ['interrupted', 'interrupted'])
+            self.assertEqual(resumed.results, [dict(trial_id='run1-trial-1', status='abandoned',
+                                                    result={'reason': 'KeyboardInterrupt'})])
+            with self.assertRaisesRegex(ValueError, 'started, completed or abandoned'):
+                resumed.record(trial, 'skipped')
+
+    def test_server_without_abandoned_trials_is_named_and_leaves_the_trial_unconfirmed(self):
+        fixture = Fixture()
+        fixture.abandoned = False
+        with server(fixture) as (url, _):
+            session = Client('demo', 'secret', url=url).experiment('Demo').subjects[0].sessions[0]
+            session.start()
+            run = session.next_run()
+            trial = run.next_trial()
+            run.record(trial, 'started')
+            with self.assertRaisesRegex(ApiError, 'HTTP 400: .* This server may predate abandoned trials; ask its '
+                                                  'operator to upgrade it. trial-1 was not changed.'):
+                run.record(trial, 'abandoned')
+            self.assertEqual(session.unconfirmed, (trial,))
+
+    def test_results_must_be_plain_json_and_bad_values_are_never_sent(self):
+        fixture = Fixture()
+        with server(fixture) as (url, _):
+            session = Client('demo', 'secret', url=url).experiment('Demo').subjects[0].sessions[0]
+            session.start()
+            run = session.next_run()
+            trial = run.next_trial()
+            run.record(trial, 'started')
+            sent = len(fixture.commands)
+            for result in ({'rt': float('nan')}, {'rt': Decimal('0.5')}, {'answer': object()}, {(1, 2): 'key'}):
+                with self.subTest(result=result), self.assertRaisesRegex(ValueError, 'plain JSON.*None for no response'):
+                    run.record(trial, 'completed', result=result)
+            self.assertEqual(len(fixture.commands), sent)
+            run.record(trial, 'completed', result={'rt': None})
+            self.assertEqual(session.results, [dict(trial_id='trial-1', status='completed', result={'rt': None})])
+
+    def test_session_results_remain_after_every_trial_is_finished(self):
+        fixture = Fixture(two_runs())
+        with server(fixture) as (url, _):
+            session = Client('demo', 'secret', url=url).experiment('Demo').subjects[0].sessions[0]
+            with session:
+                while (run := session.next_run()) is not None:
+                    while (trial := run.next_trial()) is not None:
+                        run.record(trial, 'started')
+                        run.record(trial, 'completed', result={'rt': trial.position})
+            self.assertIsNone(session.next_run())
+            self.assertEqual([row['trial_id'] for row in session.results],
+                             ['run1-trial-1', 'run1-trial-2', 'run2-trial-1', 'run2-trial-2'])
+            self.assertEqual(session.run('run-002').results, session.results[2:])
+            self.assertEqual(finishes(fixture), ['completed'])
+
+    def test_objects_display_without_requests(self):
+        with server(Fixture(two_runs())) as (url, requests):
+            client = Client('demo', 'secret', url=url)
+            experiment = client.experiment('Demo')
+            subject = experiment.subjects[0]
+            session = subject.sessions[0]
+            before = len(requests)
+            self.assertEqual([repr(item) for item in (client, experiment, client.experiment(id='experiment-1'),
+                                                      subject, session, session.run('run-002'))],
+                             [f'<Client demo at {url}>', "<Experiment 'Demo' experiment-1>", '<Experiment experiment-1>',
+                              '<Subject subject-001: 1 session>', '<Session session-001 (subject-001): run-001, run-002>',
+                              '<Run run-002 (session-001): 2 trials>'])
+            self.assertEqual(len(requests), before)
+            with self.assertRaisesRegex(ValueError, "No run 'run-003' in session-001; choose one of run-001, run-002"):
+                session.run('run-003')
+            with self.assertRaisesRegex(ValueError, "No session 'session-002' for subject-001; choose one of session-001"):
+                subject.session('session-002')
+
+    def test_start_names_explicit_takeover_while_another_program_holds_the_session(self):
+        with server(Fixture()) as (url, _):
+            experiment = Client('demo', 'secret', url=url).experiment('Demo')
+            experiment.subjects[0].sessions[0].start()
+            other = Client('demo', 'secret', url=url).experiment('Demo').subjects[0].sessions[0]
+            with self.assertRaisesRegex(ApiError, r'HTTP 409: Another presenter owns this session.*If that program '
+                                                  r'has stopped, call session.start\(takeover=True\)'):
+                other.start()
+            other.start(takeover=True)
+            with other:
+                self.assertEqual(other.next_run().next_trial().trial_id, 'trial-1')
+
+    def test_rounded_shared_fraction_is_reported(self):
+        fixture = Fixture()
+
+        def respond(method, path, headers, body):
+            if path == '/api/v1/experiments' and method == 'POST':
+                return response(dict(id='experiment-1', settings=dict(parents_per_subject=6, shared_per_subject=0)), 201)
+            return fixture(method, path, headers, body)
+
+        with server(respond) as (url, _):
+            client = Client('demo', 'secret', url=url)
+            with self.assertWarnsRegex(UserWarning, r'shared_fraction=0.1 rounds down to 0 of 6 parent videos per '
+                                                    r'subject \(realized fraction 0\)'):
+                client.create_experiment('Demo', subjects=1, trials_per_run=6, shared_fraction=0.1)
+            with patch('dbstim.client.warnings.warn') as warned:
+                client.create_experiment('Demo', subjects=1, trials_per_run=6)
+            warned.assert_not_called()
 
 
 if __name__ == '__main__':

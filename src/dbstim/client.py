@@ -1,8 +1,10 @@
 """Authenticated entry point for the stimulus browser."""
 
 from collections.abc import Sequence
+from datetime import datetime
 from getpass import getpass
 import math
+import warnings
 
 from ._transport import ApiError, Transport
 from .models import JSONObject, Metric, MetricFilter, identifier
@@ -16,11 +18,20 @@ def connect(username: str | None = None, *, url: str = 'https://dbstimuli.com', 
     return Client(username, getpass('dbstimuli.com password: '), url=url, timeout=timeout)
 
 
+def _when(timestamp) -> str:
+    if type(timestamp) not in (int, float) or not math.isfinite(timestamp):
+        return 'at an unknown time'
+    return datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M')
+
+
 class Client:
     def __init__(self, username: str, password: str, *, url: str = 'https://dbstimuli.com', timeout: float = 120):
         self._http = Transport(url, timeout=timeout)
         self.username = self._http.login(username, password)['user']['username']
         self.url = self._http.origin
+
+    def __repr__(self) -> str:
+        return f'<Client {self.username} at {self.url}>'
 
     def close(self) -> None:
         self._http.close()
@@ -53,10 +64,17 @@ class Client:
             raise ValueError('Provide an exact experiment name or id')
         if id is None:
             matches = [row for row in self.experiments() if row['name'] == name]
-            if len(matches) != 1:
-                raise ValueError('Experiment name not found or ambiguous; choose an id from client.experiments()')
+            if not matches:
+                raise ValueError(f'No experiment is named {name!r}; client.experiments() lists yours')
+            if len(matches) > 1:
+                # Names may repeat (each create makes a new experiment); show the ids to choose from.
+                choices = '; '.join(f"{row.get('latest_published_revision_id') or row['id']} "
+                                    f"({'published' if row.get('latest_published_revision_id') else 'draft'}, "
+                                    f"created {_when(row.get('created_at'))})" for row in matches)
+                raise ValueError(f'{len(matches)} experiments are named {name!r}: {choices}. '
+                                 'Open one with client.experiment(id=...)')
             id = matches[0].get('latest_published_revision_id') or matches[0]['id']
-        return Experiment(self, identifier(id))
+        return Experiment(self, identifier(id), _name=name)
 
     def create_experiment(self, name: str, *, subjects: int, trials_per_run: int,
                           sessions_per_subject: int = 1, runs_per_session: int = 1,
@@ -89,4 +107,9 @@ class Client:
         version = self._http._json('POST', '/api/v1/media/query', dict(query, limit=1))['version']
         settings = dict(counts, name=name, seed=seed, shared_fraction=shared_fraction, channel_sampling=sampling)
         document = self._http._json('POST', '/api/v1/experiments', dict(query, version=version, settings=settings))
-        return Experiment(self, identifier(document['id']))
+        saved = document.get('settings')
+        shared, total = (saved.get('shared_per_subject'), saved.get('parents_per_subject')) if isinstance(saved, dict) else (None, None)
+        if type(shared) is int and type(total) is int and total > 0 and shared / total != shared_fraction:
+            warnings.warn(f'shared_fraction={shared_fraction} rounds down to {shared} of {total} parent videos '
+                          f'per subject (realized fraction {shared / total:.3g})', stacklevel=2)
+        return Experiment(self, identifier(document['id']), _name=name)

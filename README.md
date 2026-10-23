@@ -7,18 +7,18 @@ videos, and report presentation progress from your own task program.
 
 Requires Python 3.11+. No other dependencies.
 
-    pip install "git+https://github.com/lobennett/dbstim.git@v0.4.0"
+    pip install "git+https://github.com/lobennett/dbstim.git@v0.5.0"
 
 or with uv:
 
-    uv add "dbstim @ git+https://github.com/lobennett/dbstim.git@v0.4.0"
+    uv add "dbstim @ git+https://github.com/lobennett/dbstim.git@v0.5.0"
 
-Pin a release tag (or a commit) so your analysis stays reproducible.
+Pin a release tag or commit for reproducible analyses.
 For the example notebook, add the Jupyter extra:
 
-    pip install "dbstim[jupyter] @ git+https://github.com/lobennett/dbstim.git@v0.4.0"
+    pip install "dbstim[jupyter] @ git+https://github.com/lobennett/dbstim.git@v0.5.0"
 
-You sign in with your dbstimuli.com account; no Google Cloud access or API key is needed.
+Sign in with your dbstimuli.com account; no Google Cloud access or API key is needed.
 
 ## Create and publish
 
@@ -38,8 +38,8 @@ experiment = client.create_experiment(
 experiment.publish()
 ```
 
-To reopen one later: `client.experiment("Memory demo")`, or
-`client.experiment(id="exact-revision-id")` when names are ambiguous.
+Reopen it later with `client.experiment("Memory demo")`; if names repeat, the
+error lists the ids for `client.experiment(id=...)`.
 
 ## Present
 
@@ -56,19 +56,28 @@ with session:  # starts the session and finishes it when the block ends
 ```
 
 Leaving the block finishes the session as `completed` when every trial is
-completed, `interrupted` if you stopped early (including Ctrl-C), or `failed` if an
-error was raised.
-Stop on any API error and retry an unacknowledged call unchanged. A trial that
-started but never completed blocks continuation until reviewed; it is never
-replayed automatically.
+completed, `interrupted` if you stopped early (including Ctrl-C) or abandoned a
+trial, or `failed` if an error was raised. Results must be plain JSON (convert
+numpy numbers; use `None` for no response).
 
-`session.download(directory)` fetches the whole session ahead of time;
-`run.media(trial, mode="remote")` returns a five-minute streaming URL instead.
-Progress lives on the server, so another device sees the same state.
-`run.results` reads the results you recorded.
+Videos are verified and kept in your per-user cache (`~/.cache/dbstim`), so a
+notebook's `session.download()` serves later programs in any folder.
+`session.download(directory)` chooses another folder; `run.media(trial, mode="remote")`
+returns a five-minute streaming URL. `session.results` lists what you recorded.
 
 The step-by-step notebook is `notebooks/api.ipynb`
 (`uv run --extra jupyter jupyter lab notebooks/api.ipynb` from a clone).
+
+## When something goes wrong
+
+- **Stopped mid-trial:** `session.unconfirmed` lists the trial. Record it
+  `"completed"` only if it was shown to the end, otherwise
+  `session.record(trial, "abandoned")`. Nothing is replayed.
+- **Dropped connection:** commands are resent unchanged, never recorded twice.
+- **"Another presenter owns this session":** once that program has stopped,
+  call `session.start(takeover=True)`.
+
+[Recovering a session](docs/recovery.md) also covers upgrading from 0.4.
 
 ## Glossary
 
@@ -78,14 +87,14 @@ The step-by-step notebook is `notebooks/api.ipynb`
 - **Parent:** a full video, or the first half of a video split for a foil.
 - **Foil:** the second half of a split parent.
 - **Repeat:** a parent shown a second time. Foils and repeats count toward `trials_per_run`.
-- **shared_fraction:** share of parent videos every subject sees.
+- **shared_fraction:** share of parent videos every subject sees, rounded down;
+  see `experiment.summary()["shared_fraction_realized"]`.
 - **sampling:** how YouTube channels are drawn: `"random"`, `"balanced"`, or `"unique"`.
 - **corpus:** searches `content` in `"captions"`, `"transcripts"`, or `"both"`.
-- **Unconfirmed:** recorded `started` but never `completed`.
-- **Takeover:** `session.start(takeover=True)` replaces another device's claim.
+- **Unconfirmed:** recorded `started` but neither `completed` nor `abandoned`.
+- **Abandoned:** started but not shown to the end; final, never replayed.
 
-Older `dbp_api` clients are a legacy package pinned at revision `d11933f`; new
-code should use `dbstim`.
+The legacy `dbp_api` package (revision `d11933f`) is superseded by `dbstim`.
 
 ## Development
 
