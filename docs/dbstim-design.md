@@ -56,11 +56,11 @@ record() sends started/completed events with optional task-reported results.
 Retries reuse event identities. The server acknowledges changes; failures stop
 advancement. start() claims one active presenter; takeover requires explicit review.
 finish() accepts completed/interrupted/failed; completion requires all trials confirmed.
-No automatic replay, wrapper, or fabricated viewing confirmation.
+`with session:` only calls start()/finish(); no automatic replay or fabricated confirmation.
 
 Media modes: local verified files, on-demand cache, or temporary authorized remote
 URLs. All resolve the same pinned rendition, including rendered halves. URL-capable
-players can stream; others cache. Proposed default: download before presentation.
+players can stream; others cache. Default: verified file, downloaded first if needed.
 
 ## Delivery
 
