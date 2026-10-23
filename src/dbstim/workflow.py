@@ -270,8 +270,14 @@ class Session:
         return tuple(trial for trial in self._trials if trial.trial_id in unconfirmed)
 
     @property
+    def abandoned(self) -> tuple[Trial, ...]:
+        """Every trial recorded abandoned, with or without a result; none is presented again."""
+        abandoned = set(self._state().get('abandoned', ()))  # Servers before abandoned outcomes have none.
+        return tuple(trial for trial in self._trials if trial.trial_id in abandoned)
+
+    @property
     def results(self) -> list[JSONObject]:
-        """Every result recorded in this session, also after every trial is finished."""
+        """Every result payload recorded in this session, with its status, also after every trial is finished."""
         return self._state()['results']
 
     def record(self, trial: Trial, status: TrialStatus, result: JSONObject | None = None) -> None:

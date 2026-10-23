@@ -31,6 +31,7 @@ classDiagram
         id
         run_ids
         unconfirmed
+        abandoned
         results
         with session
         next_run() Run_or_None
@@ -104,6 +105,8 @@ Use `Client.close()` or a `with` block when finished.
 `session.run("latest")` selects the most recently started run instead. An
 unconfirmed start in any run blocks `next_trial()` for the whole session until it
 is recorded `completed` or `abandoned`; `session.unconfirmed` lists it.
+`session.abandoned` lists every abandoned trial, with or without a result;
+`session.results` lists only recorded result payloads, each with its status.
 `run.media(trial)` returns a verified file from the per-user cache, downloading
 it first if needed.
 

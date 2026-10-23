@@ -124,12 +124,21 @@ class RealServerTests(unittest.TestCase):
                 resumed.next_run().next_trial()
             resumed.record(interrupted, 'abandoned', result={'reason': 'KeyboardInterrupt'})
             self.assertEqual(resumed.unconfirmed, ())
+            run = resumed.next_run()
+            skipped = run.next_trial()  # Abandoned without a result.
+            run.record(skipped, 'started')
+            presented.append(skipped.trial_id)
+            run.record(skipped, 'abandoned')
             present_all(resumed, presented)
         self.assertEqual(len(presented), 4)
         self.assertEqual(presented.count(interrupted.trial_id), 1)
         state = self.status(resumed)
-        self.assertEqual((state['status'], state['abandoned'], state['unconfirmed']), ('interrupted', [interrupted.trial_id], []))
-        self.assertEqual([row['status'] for row in resumed.results if row['trial_id'] == interrupted.trial_id], ['abandoned'])
+        abandoned = sorted([interrupted.trial_id, skipped.trial_id])
+        self.assertEqual((state['status'], sorted(state['abandoned']), state['unconfirmed']), ('interrupted', abandoned, []))
+        for view in (resumed, self.reopen(experiment)):
+            self.assertEqual(sorted(trial.trial_id for trial in view.abandoned), abandoned)
+            self.assertEqual([(row['trial_id'], row['status']) for row in view.results if row['status'] == 'abandoned'],
+                             [(interrupted.trial_id, 'abandoned')])
         with resumed:  # Nothing is left to present, and an abandoned trial still means interrupted.
             self.assertIsNone(resumed.next_run())
             with self.assertRaisesRegex(ApiError, 'HTTP 409'):
@@ -138,7 +147,7 @@ class RealServerTests(unittest.TestCase):
                 resumed.finish('completed')
         self.assertEqual(self.status(resumed)['status'], 'interrupted')
         summary = self.client._http._json('GET', experiment._path + '/progress')['subjects'][0]
-        self.assertEqual((summary['completed'], summary['abandoned'], summary['unconfirmed']), (3, 1, 0))
+        self.assertEqual((summary['completed'], summary['abandoned'], summary['unconfirmed']), (2, 2, 0))
 
     def test_server_without_abandoned_outcomes_refuses_clearly_and_changes_nothing(self):
         with real_server(legacy_events=True) as (origin, root):
@@ -153,7 +162,7 @@ class RealServerTests(unittest.TestCase):
                     session.record(trial, 'abandoned')
                 self.assertIn(caught.exception.status, (400, 409))
                 self.assertEqual(count(root, 'experiment_trial_events'), events)
-                self.assertEqual(session.unconfirmed, (trial,))
+                self.assertEqual((session.unconfirmed, session.abandoned), ((trial,), ()))
                 run.record(trial, 'completed', result={'seen': True})  # It was shown, so record it honestly.
                 self.assertEqual(run.next_trial(), run.trials[1])
 

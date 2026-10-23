@@ -196,6 +196,32 @@ class UsabilityTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'started, completed or abandoned'):
                 resumed.record(trial, 'skipped')
 
+    def test_every_abandoned_trial_is_listed_with_or_without_a_result(self):
+        fixture = Fixture(two_runs())
+        with server(fixture) as (url, _):
+            session = Client('demo', 'secret', url=url).experiment('Demo').subjects[0].sessions[0]
+            presented = []
+            with session:
+                self.assertEqual(session.abandoned, ())
+                while (run := session.next_run()) is not None:
+                    while (trial := run.next_trial()) is not None:
+                        run.record(trial, 'started')
+                        presented.append(trial.trial_id)
+                        if trial.trial_id == 'run1-trial-1':
+                            run.record(trial, 'abandoned')
+                        elif trial.trial_id == 'run2-trial-1':
+                            run.record(trial, 'abandoned', result={'reason': 'looked away'})
+                        else:
+                            run.record(trial, 'completed')
+            self.assertEqual(presented, ['run1-trial-1', 'run1-trial-2', 'run2-trial-1', 'run2-trial-2'])
+            self.assertEqual(finishes(fixture), ['interrupted'])
+            reopened = Client('demo', 'secret', url=url).experiment('Demo').subjects[0].sessions[0]
+            for view in (session, reopened):
+                self.assertEqual([trial.trial_id for trial in view.abandoned], ['run1-trial-1', 'run2-trial-1'])
+                self.assertEqual(view.results, [dict(trial_id='run2-trial-1', status='abandoned',
+                                                     result={'reason': 'looked away'})])
+                self.assertIsNone(view.next_run())
+
     def test_server_without_abandoned_trials_is_named_and_leaves_the_trial_unconfirmed(self):
         fixture = Fixture()
         fixture.abandoned = False

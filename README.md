@@ -92,7 +92,7 @@ The step-by-step notebook is `notebooks/api.ipynb`
 - **sampling:** how YouTube channels are drawn: `"random"`, `"balanced"`, or `"unique"`.
 - **corpus:** searches `content` in `"captions"`, `"transcripts"`, or `"both"`.
 - **Unconfirmed:** recorded `started` but neither `completed` nor `abandoned`.
-- **Abandoned:** started but not shown to the end; final, never replayed.
+- **Abandoned:** not shown to the end; final; listed by `session.abandoned`.
 
 The legacy `dbp_api` package (revision `d11933f`) is superseded by `dbstim`.
 

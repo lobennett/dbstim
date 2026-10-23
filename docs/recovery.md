@@ -24,8 +24,9 @@ with session:
 ```
 
 Record `completed` only for a trial the participant really saw. A session with an
-abandoned trial finishes `interrupted`, never `completed`; `session.results` and
-the experiment's progress keep abandoned trials separate.
+abandoned trial finishes `interrupted`, never `completed`. `session.abandoned`
+lists every abandoned trial, even one recorded without a result;
+`session.results` holds only the results you sent, each with its status.
 
 ## Results
 
