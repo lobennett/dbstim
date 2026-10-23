@@ -26,6 +26,7 @@ class Fixture:
         self.document = document or manifest()
         self.states = {}
         self.commands = {}
+        self.results = []
         self.lost_reply = False
 
     def __call__(self, method, path, headers, body):
@@ -59,11 +60,13 @@ class Fixture:
                 return response(dict(manifest_sha256=self.document['manifest_sha256'], session_id='session-001',
                                      runs=[dict(run_id=f"run-{block['block_index']:03d}", trials=block['trials'])
                                            for block in self.document['blocks']],
-                                     latest_run_id='run-001', progress=self.states.copy(),
+                                     latest_run_id='run-001', progress=self.states.copy(), results=list(self.results),
                                      unconfirmed=[key for key, value in self.states.items() if value['status'] == 'started']))
             self.commands[document['request_id']] = document
             if path.endswith('/trials'):
                 self.states[document['trial_id']] = dict(status=document['status'])
+                if document.get('result') is not None:
+                    self.results.append(dict(trial_id=document['trial_id'], result=document['result']))
             if self.lost_reply:
                 self.lost_reply = False
                 return response({}, 503)

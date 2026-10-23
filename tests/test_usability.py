@@ -111,7 +111,9 @@ class UsabilityTests(unittest.TestCase):
                         trials = run.trials if outcome == 'completed' else run.trials[:1]
                         for trial in trials:
                             run.record(trial, 'started')
-                            run.record(trial, 'completed')
+                            run.record(trial, 'completed', dict(rt=trial.position))
+                        self.assertEqual(run.results, [dict(trial_id=trial.trial_id, result=dict(rt=trial.position))
+                                                       for trial in trials])
                         if outcome == 'failed':
                             raise KeyError('presentation crashed')
                 self.assertEqual(finishes(fixture), [outcome])
